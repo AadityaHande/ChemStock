@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFirestore } from '@/contexts/FirestoreContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,10 +12,25 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   Shield, Edit, Save, X, Trash2, Search, Plus, Download, Upload, 
-  AlertTriangle, CheckCircle, Loader2, Lock, Users 
+  AlertTriangle, CheckCircle, Loader2, Lock, Users, Table as TableIcon,
+  LayoutGrid, Undo, Redo, Filter, SortAsc, Copy, Clipboard
 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from 'next/navigation';
+import { 
+  sanitizeString, 
+  validateQuantity, 
+  isValidCASNumber,
+  RateLimiter,
+  debounce,
+  validateCSVFile,
+  validateChemicalData
+} from '@/lib/validation';
+import { 
+  logAuditAction, 
+  createChemicalAuditLog, 
+  createEquipmentAuditLog 
+} from '@/lib/auditLog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,12 +42,22 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { deleteDoc, doc, addDoc, collection } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 type EditingState = {
   id: string;
   field: string;
   value: string;
 };
+
+type ViewMode = 'card' | 'spreadsheet';
+
+// Rate limiter for save operations (10 per minute)
+const saveRateLimiter = new RateLimiter(10, 60000);
 
 export default function AdminPage() {
   const { user, isAdmin, loading: authLoading } = useAuth();
@@ -43,6 +68,28 @@ export default function AdminPage() {
   const [editingCell, setEditingCell] = useState<EditingState | null>(null);
   const [searchChemical, setSearchChemical] = useState('');
   const [searchEquipment, setSearchEquipment] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('card');
+  const [selectedChemicals, setSelectedChemicals] = useState<Set<string>>(new Set());
+  const [selectedEquipment, setSelectedEquipment] = useState<Set<string>>(new Set());
+  const [editHistory, setEditHistory] = useState<any[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const inputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
+  const [csvImportDialogOpen, setCSVImportDialogOpen] = useState(false);
+  const [csvPreviewData, setCSVPreviewData] = useState<any[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<'chemicals' | 'equipment'>('chemicals');
+
+  // Debounced search handlers
+  const debouncedSearchChemical = useCallback(
+    debounce((value: string) => setSearchChemical(value), 300),
+    []
+  );
+
+  const debouncedSearchEquipment = useCallback(
+    debounce((value: string) => setSearchEquipment(value), 300),
+    []
+  );
 
   // Redirect if not admin
   if (!authLoading && !isAdmin) {
@@ -61,9 +108,46 @@ export default function AdminPage() {
 
   if (authLoading || dataLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        <p className="ml-2 text-muted-foreground">Loading admin panel...</p>
+      <div className="container mx-auto p-4 space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-48" />
+            <Skeleton className="h-4 w-96" />
+          </div>
+        </div>
+
+        {/* Stats Cards Skeletons */}
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i}>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-4 rounded-full" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-8 w-16" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Tabs Skeleton */}
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-48 mb-2" />
+            <Skeleton className="h-4 w-96" />
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <Skeleton className="h-10 w-full" />
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <Skeleton className="h-16 w-full" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -77,29 +161,72 @@ export default function AdminPage() {
   };
 
   const handleSaveChemical = async (id: string) => {
-    if (!editingCell) return;
+    if (!editingCell || !user) return;
+
+    // Rate limiting check
+    if (!saveRateLimiter.isAllowed(user.uid)) {
+      toast({ 
+        variant: "destructive", 
+        title: "Too many requests", 
+        description: "Please wait before making more changes." 
+      });
+      return;
+    }
 
     try {
+      const chemical = chemicals.find(c => c.id === id);
+      if (!chemical) return;
+
       const updateData: any = {};
       
       if (editingCell.field === 'quantity') {
-        const qty = parseFloat(editingCell.value);
-        if (isNaN(qty) || qty < 0) {
-          toast({ variant: "destructive", title: "Invalid quantity", description: "Please enter a valid number" });
+        const validation = validateQuantity(editingCell.value);
+        if (!validation.valid) {
+          toast({ 
+            variant: "destructive", 
+            title: "Invalid quantity", 
+            description: validation.error || "Please enter a valid number" 
+          });
           return;
         }
-        updateData.quantity = qty;
+        updateData.quantity = validation.value;
       } else if (editingCell.field === 'unit') {
-        updateData.unit = editingCell.value;
+        updateData.unit = sanitizeString(editingCell.value);
       } else if (editingCell.field === 'formula') {
-        updateData.formula = editingCell.value;
+        updateData.formula = sanitizeString(editingCell.value);
       } else if (editingCell.field === 'casNumber') {
-        updateData.casNumber = editingCell.value;
+        const casNum = sanitizeString(editingCell.value);
+        if (casNum && !isValidCASNumber(casNum)) {
+          toast({ 
+            variant: "destructive", 
+            title: "Invalid CAS Number", 
+            description: "CAS number must be in format XX-XX-X" 
+          });
+          return;
+        }
+        updateData.casNumber = casNum;
       } else if (editingCell.field === 'category') {
-        updateData.category = editingCell.value;
+        updateData.category = sanitizeString(editingCell.value);
       }
 
+      // Store before state for audit log
+      const beforeState = { [editingCell.field]: (chemical as any)[editingCell.field] };
+      const afterState = updateData;
+
       await updateChemical(id, updateData);
+      
+      // Log the audit action
+      await logAuditAction(
+        createChemicalAuditLog(
+          'update',
+          user.uid,
+          user.email || 'unknown',
+          id,
+          chemical.name,
+          beforeState,
+          afterState
+        )
+      );
       
       toast({
         title: "✅ Updated Successfully",
@@ -109,6 +236,20 @@ export default function AdminPage() {
       setEditingCell(null);
     } catch (error) {
       console.error('Error updating chemical:', error);
+      
+      // Log failed attempt
+      if (user) {
+        await logAuditAction({
+          userId: user.uid,
+          userEmail: user.email || 'unknown',
+          action: 'update',
+          resource: 'chemical',
+          resourceId: id,
+          success: false,
+          errorMessage: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+      
       toast({
         variant: "destructive",
         title: "Update Failed",
@@ -118,26 +259,60 @@ export default function AdminPage() {
   };
 
   const handleSaveEquipment = async (id: string) => {
-    if (!editingCell) return;
+    if (!editingCell || !user) return;
+
+    // Rate limiting check
+    if (!saveRateLimiter.isAllowed(user.uid)) {
+      toast({ 
+        variant: "destructive", 
+        title: "Too many requests", 
+        description: "Please wait before making more changes." 
+      });
+      return;
+    }
 
     try {
+      const equip = equipment.find(e => e.id === id);
+      if (!equip) return;
+
       const updateData: any = {};
       
       if (editingCell.field === 'totalQuantity') {
-        const qty = parseInt(editingCell.value);
-        if (isNaN(qty) || qty < 0) {
-          toast({ variant: "destructive", title: "Invalid quantity", description: "Please enter a valid number" });
+        const validation = validateQuantity(editingCell.value);
+        if (!validation.valid) {
+          toast({ 
+            variant: "destructive", 
+            title: "Invalid quantity", 
+            description: validation.error || "Please enter a valid number" 
+          });
           return;
         }
-        updateData.totalQuantity = qty;
-        updateData.availableQuantity = qty; // Reset available when total changes
+        updateData.totalQuantity = validation.value;
+        updateData.availableQuantity = validation.value; // Reset available when total changes
       } else if (editingCell.field === 'condition') {
-        updateData.condition = editingCell.value;
+        updateData.condition = sanitizeString(editingCell.value);
       } else if (editingCell.field === 'category') {
-        updateData.category = editingCell.value;
+        updateData.category = sanitizeString(editingCell.value);
       }
 
+      // Store before state for audit log
+      const beforeState = { [editingCell.field]: (equip as any)[editingCell.field] };
+      const afterState = updateData;
+
       await updateEquipment(id, updateData);
+      
+      // Log the audit action
+      await logAuditAction(
+        createEquipmentAuditLog(
+          'update',
+          user.uid,
+          user.email || 'unknown',
+          id,
+          equip.name,
+          beforeState,
+          afterState
+        )
+      );
       
       toast({
         title: "✅ Updated Successfully",
@@ -147,6 +322,20 @@ export default function AdminPage() {
       setEditingCell(null);
     } catch (error) {
       console.error('Error updating equipment:', error);
+      
+      // Log failed attempt
+      if (user) {
+        await logAuditAction({
+          userId: user.uid,
+          userEmail: user.email || 'unknown',
+          action: 'update',
+          resource: 'equipment',
+          resourceId: id,
+          success: false,
+          errorMessage: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+      
       toast({
         variant: "destructive",
         title: "Update Failed",
@@ -211,6 +400,215 @@ export default function AdminPage() {
     URL.revokeObjectURL(url);
   };
 
+  // Bulk Delete Handler
+  const handleBulkDelete = async () => {
+    if (!user) return;
+
+    try {
+      const itemsToDelete = deleteTarget === 'chemicals' 
+        ? Array.from(selectedChemicals)
+        : Array.from(selectedEquipment);
+
+      setIsImporting(true); // Reuse for loading state
+      
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const id of itemsToDelete) {
+        try {
+          await deleteDoc(doc(db, deleteTarget, id));
+          
+          // Log audit action
+          const item = deleteTarget === 'chemicals'
+            ? chemicals.find(c => c.id === id)
+            : equipment.find(e => e.id === id);
+
+          if (item) {
+            await logAuditAction({
+              userId: user.uid,
+              userEmail: user.email || 'unknown',
+              action: 'bulk_delete',
+              resource: deleteTarget === 'chemicals' ? 'chemical' : 'equipment',
+              resourceId: id,
+              resourceName: item.name,
+              success: true,
+            });
+          }
+          
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to delete ${id}:`, error);
+          failCount++;
+        }
+      }
+
+      // Clear selection
+      if (deleteTarget === 'chemicals') {
+        setSelectedChemicals(new Set());
+      } else {
+        setSelectedEquipment(new Set());
+      }
+
+      setDeleteDialogOpen(false);
+      setIsImporting(false);
+
+      toast({
+        title: "✅ Bulk Delete Complete",
+        description: `Successfully deleted ${successCount} items${failCount > 0 ? `, ${failCount} failed` : ''}`,
+      });
+    } catch (error) {
+      console.error('Bulk delete error:', error);
+      setIsImporting(false);
+      toast({
+        variant: "destructive",
+        title: "Bulk Delete Failed",
+        description: "An error occurred during bulk deletion.",
+      });
+    }
+  };
+
+  // CSV Import Handler
+  const handleCSVImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file
+    const validation = validateCSVFile(file);
+    if (!validation.valid) {
+      toast({
+        variant: "destructive",
+        title: "Invalid File",
+        description: validation.error,
+      });
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const lines = text.split('\n').filter(line => line.trim());
+      
+      if (lines.length < 2) {
+        toast({
+          variant: "destructive",
+          title: "Empty CSV",
+          description: "CSV file must contain headers and at least one data row.",
+        });
+        return;
+      }
+
+      const headers = lines[0].split(',').map(h => h.trim());
+      const expectedHeaders = ['Name', 'Formula', 'CAS Number', 'Quantity', 'Unit', 'Category'];
+      
+      // Basic header validation
+      const hasRequiredHeaders = expectedHeaders.every(h => 
+        headers.some(header => header.toLowerCase() === h.toLowerCase())
+      );
+
+      if (!hasRequiredHeaders) {
+        toast({
+          variant: "destructive",
+          title: "Invalid CSV Format",
+          description: `CSV must have headers: ${expectedHeaders.join(', ')}`,
+        });
+        return;
+      }
+
+      // Parse data rows
+      const previewData = lines.slice(1, 11).map((line, idx) => { // Preview first 10
+        const values = line.split(',').map(v => v.trim());
+        const [name, formula, casNumber, quantity, unit, category] = values;
+        
+        const chemicalData = {
+          name: name || `Chemical ${idx + 1}`,
+          formula: formula || '',
+          casNumber: casNumber || '',
+          quantity: parseFloat(quantity) || 0,
+          unit: unit || 'g',
+          category: category || 'Uncategorized',
+        };
+
+        // Validate each row
+        const validation = validateChemicalData(chemicalData);
+        return {
+          ...chemicalData,
+          valid: validation.valid,
+          error: validation.errors.join(', '),
+        };
+      });
+
+      setCSVPreviewData(previewData);
+      setCSVImportDialogOpen(true);
+    } catch (error) {
+      console.error('CSV parse error:', error);
+      toast({
+        variant: "destructive",
+        title: "Parse Error",
+        description: "Failed to parse CSV file. Please check the format.",
+      });
+    }
+  };
+
+  // Confirm CSV Import
+  const confirmCSVImport = async () => {
+    if (!user) return;
+
+    try {
+      setIsImporting(true);
+      
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const item of csvPreviewData) {
+        if (!item.valid) {
+          failCount++;
+          continue;
+        }
+
+        try {
+          const { valid, error, ...chemicalData } = item;
+          await addDoc(collection(db, 'chemicals'), {
+            ...chemicalData,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+
+          // Log audit action
+          await logAuditAction({
+            userId: user.uid,
+            userEmail: user.email || 'unknown',
+            action: 'import',
+            resource: 'chemical',
+            resourceName: chemicalData.name,
+            metadata: { source: 'csv' },
+            success: true,
+          });
+
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to import ${item.name}:`, error);
+          failCount++;
+        }
+      }
+
+      setCSVImportDialogOpen(false);
+      setIsImporting(false);
+      setCSVPreviewData([]);
+
+      toast({
+        title: "✅ Import Complete",
+        description: `Successfully imported ${successCount} chemicals${failCount > 0 ? `, ${failCount} failed` : ''}`,
+      });
+    } catch (error) {
+      console.error('Import error:', error);
+      setIsImporting(false);
+      toast({
+        variant: "destructive",
+        title: "Import Failed",
+        description: "An error occurred during import.",
+      });
+    }
+  };
+
   const renderEditableCell = (
     id: string,
     field: string,
@@ -253,6 +651,59 @@ export default function AdminPage() {
         >
           <Edit className="h-3 w-3" />
         </Button>
+      </div>
+    );
+  };
+
+  const renderSpreadsheetCell = (
+    id: string,
+    field: string,
+    value: any,
+    onSave: (id: string) => void
+  ) => {
+    const isEditing = editingCell?.id === id && editingCell?.field === field;
+    const cellKey = `${id}-${field}`;
+
+    if (isEditing) {
+      return (
+        <Input
+          ref={(el) => {
+            inputRefs.current[cellKey] = el;
+          }}
+          value={editingCell.value}
+          onChange={(e) => setEditingCell({ ...editingCell, value: e.target.value })}
+          className="h-8 min-w-[120px] border-2 border-primary"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              onSave(id);
+              setEditingCell(null);
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              handleCancelEdit();
+            }
+            if (e.key === 'Tab') {
+              e.preventDefault();
+              onSave(id);
+              setEditingCell(null);
+            }
+          }}
+          onBlur={() => {
+            onSave(id);
+          }}
+        />
+      );
+    }
+
+    return (
+      <div
+        className="min-h-[32px] px-2 py-1 cursor-pointer hover:bg-accent/50 rounded transition-colors"
+        onClick={() => handleStartEdit(id, field, value)}
+        onDoubleClick={() => handleStartEdit(id, field, value)}
+      >
+        {value || <span className="text-muted-foreground italic">Click to edit</span>}
       </div>
     );
   };
@@ -331,17 +782,89 @@ export default function AdminPage() {
         <TabsContent value="chemicals" className="space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Chemicals Inventory</CardTitle>
-                  <CardDescription>Edit quantities, formulas, CAS numbers, and more</CardDescription>
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Chemicals Inventory</CardTitle>
+                    <CardDescription>
+                      {viewMode === 'spreadsheet' 
+                        ? 'Excel-like editing - Click cells to edit, use Tab/Enter to navigate' 
+                        : 'Edit quantities, formulas, CAS numbers, and more'}
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant={viewMode === 'card' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setViewMode('card')}
+                    >
+                      <LayoutGrid className="h-4 w-4 mr-2" />
+                      Card View
+                    </Button>
+                    <Button
+                      variant={viewMode === 'spreadsheet' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setViewMode('spreadsheet')}
+                    >
+                      <TableIcon className="h-4 w-4 mr-2" />
+                      Spreadsheet
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={exportChemicalsCSV}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Export CSV
-                  </Button>
-                </div>
+                
+                {/* Toolbar for Spreadsheet Mode */}
+                {viewMode === 'spreadsheet' && (
+                  <div className="flex flex-wrap gap-2 items-center p-3 bg-muted/50 rounded-lg">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={selectedChemicals.size === 0}
+                      onClick={() => {
+                        setDeleteTarget('chemicals');
+                        setDeleteDialogOpen(true);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete ({selectedChemicals.size})
+                    </Button>
+                    <Button variant="outline" size="sm" disabled>
+                      <Copy className="h-4 w-4 mr-2" />
+                      Duplicate
+                    </Button>
+                    <Separator orientation="vertical" className="h-6" />
+                    <Button variant="outline" size="sm" onClick={exportChemicalsCSV}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => document.getElementById('csv-import-chemicals')?.click()}
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      Import CSV
+                    </Button>
+                    <input
+                      id="csv-import-chemicals"
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      onChange={handleCSVImport}
+                    />
+                    <Separator orientation="vertical" className="h-6" />
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => setSelectedChemicals(new Set())}
+                      disabled={selectedChemicals.size === 0}
+                    >
+                      Clear Selection
+                    </Button>
+                    <div className="ml-auto text-sm text-muted-foreground">
+                      {filteredChemicals.length} chemicals
+                    </div>
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -350,8 +873,8 @@ export default function AdminPage() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search chemicals by name, formula, or CAS..."
-                    value={searchChemical}
-                    onChange={(e) => setSearchChemical(e.target.value)}
+                    defaultValue={searchChemical}
+                    onChange={(e) => debouncedSearchChemical(e.target.value)}
                     className="pl-10"
                   />
                 </div>
@@ -360,6 +883,20 @@ export default function AdminPage() {
                   <Table className="min-w-[700px]">
                     <TableHeader>
                       <TableRow>
+                        {viewMode === 'spreadsheet' && (
+                          <TableHead className="w-12">
+                            <Checkbox
+                              checked={selectedChemicals.size === filteredChemicals.length && filteredChemicals.length > 0}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedChemicals(new Set(filteredChemicals.map(c => c.id)));
+                                } else {
+                                  setSelectedChemicals(new Set());
+                                }
+                              }}
+                            />
+                          </TableHead>
+                        )}
                         <TableHead>Name</TableHead>
                         <TableHead>Formula</TableHead>
                         <TableHead>CAS Number</TableHead>
@@ -370,31 +907,80 @@ export default function AdminPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredChemicals.map((chemical) => (
-                        <TableRow key={chemical.id}>
-                          <TableCell className="font-medium">{chemical.name}</TableCell>
-                          <TableCell>
-                            {renderEditableCell(chemical.id, 'formula', chemical.formula, handleSaveChemical)}
-                          </TableCell>
-                          <TableCell>
-                            {renderEditableCell(chemical.id, 'casNumber', chemical.casNumber, handleSaveChemical)}
-                          </TableCell>
-                          <TableCell>
-                            {renderEditableCell(chemical.id, 'quantity', chemical.quantity.toFixed(3), handleSaveChemical)}
-                          </TableCell>
-                          <TableCell>
-                            {renderEditableCell(chemical.id, 'unit', chemical.unit, handleSaveChemical)}
-                          </TableCell>
-                          <TableCell>
-                            {renderEditableCell(chemical.id, 'category', chemical.category, handleSaveChemical)}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={chemical.quantity === 0 ? 'destructive' : chemical.quantity < 50 ? 'warning' : 'default'}>
-                              {chemical.quantity === 0 ? 'Out of Stock' : chemical.quantity < 50 ? 'Low Stock' : 'In Stock'}
-                            </Badge>
+                      {filteredChemicals.length === 0 ? (
+                        <TableRow>
+                          <TableCell 
+                            colSpan={viewMode === 'spreadsheet' ? 8 : 7} 
+                            className="h-24 text-center"
+                          >
+                            <div className="flex flex-col items-center justify-center text-muted-foreground">
+                              <Search className="h-8 w-8 mb-2" />
+                              <p>No chemicals found</p>
+                              <p className="text-sm">Try adjusting your search</p>
+                            </div>
                           </TableCell>
                         </TableRow>
-                      ))}
+                      ) : (
+                        filteredChemicals.map((chemical) => (
+                          <TableRow 
+                            key={chemical.id}
+                            className={selectedChemicals.has(chemical.id) ? 'bg-muted/50' : ''}
+                          >
+                            {viewMode === 'spreadsheet' && (
+                              <TableCell>
+                                <Checkbox
+                                  checked={selectedChemicals.has(chemical.id)}
+                                  onCheckedChange={(checked) => {
+                                    const newSet = new Set(selectedChemicals);
+                                    if (checked) {
+                                      newSet.add(chemical.id);
+                                    } else {
+                                      newSet.delete(chemical.id);
+                                    }
+                                    setSelectedChemicals(newSet);
+                                  }}
+                                />
+                              </TableCell>
+                            )}
+                            <TableCell className="font-medium">{chemical.name}</TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(chemical.id, 'formula', chemical.formula, handleSaveChemical) :
+                                renderEditableCell(chemical.id, 'formula', chemical.formula, handleSaveChemical)
+                              }
+                            </TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(chemical.id, 'casNumber', chemical.casNumber, handleSaveChemical) :
+                                renderEditableCell(chemical.id, 'casNumber', chemical.casNumber, handleSaveChemical)
+                              }
+                            </TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(chemical.id, 'quantity', chemical.quantity.toFixed(3), handleSaveChemical) :
+                                renderEditableCell(chemical.id, 'quantity', chemical.quantity.toFixed(3), handleSaveChemical)
+                              }
+                            </TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(chemical.id, 'unit', chemical.unit, handleSaveChemical) :
+                                renderEditableCell(chemical.id, 'unit', chemical.unit, handleSaveChemical)
+                              }
+                            </TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(chemical.id, 'category', chemical.category, handleSaveChemical) :
+                                renderEditableCell(chemical.id, 'category', chemical.category, handleSaveChemical)
+                              }
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={chemical.quantity === 0 ? 'destructive' : chemical.quantity < 50 ? 'warning' : 'default'}>
+                                {chemical.quantity === 0 ? 'Out of Stock' : chemical.quantity < 50 ? 'Low Stock' : 'In Stock'}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
                     </TableBody>
                   </Table>
                 </div>
@@ -407,17 +993,78 @@ export default function AdminPage() {
         <TabsContent value="equipment" className="space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Equipment Inventory</CardTitle>
-                  <CardDescription>Edit quantities, conditions, and categories</CardDescription>
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Equipment Inventory</CardTitle>
+                    <CardDescription>
+                      {viewMode === 'spreadsheet' 
+                        ? 'Excel-like editing - Click cells to edit, use Tab/Enter to navigate' 
+                        : 'Edit quantities, conditions, and categories'}
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant={viewMode === 'card' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setViewMode('card')}
+                    >
+                      <LayoutGrid className="h-4 w-4 mr-2" />
+                      Card View
+                    </Button>
+                    <Button
+                      variant={viewMode === 'spreadsheet' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setViewMode('spreadsheet')}
+                    >
+                      <TableIcon className="h-4 w-4 mr-2" />
+                      Spreadsheet
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={exportEquipmentCSV}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Export CSV
-                  </Button>
-                </div>
+                
+                {/* Toolbar for Spreadsheet Mode */}
+                {viewMode === 'spreadsheet' && (
+                  <div className="flex flex-wrap gap-2 items-center p-3 bg-muted/50 rounded-lg">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={selectedEquipment.size === 0}
+                      onClick={() => {
+                        setDeleteTarget('equipment');
+                        setDeleteDialogOpen(true);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete ({selectedEquipment.size})
+                    </Button>
+                    <Button variant="outline" size="sm" disabled>
+                      <Copy className="h-4 w-4 mr-2" />
+                      Duplicate
+                    </Button>
+                    <Separator orientation="vertical" className="h-6" />
+                    <Button variant="outline" size="sm" onClick={exportEquipmentCSV}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+                    <Button variant="outline" size="sm" disabled>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Import CSV
+                    </Button>
+                    <Separator orientation="vertical" className="h-6" />
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => setSelectedEquipment(new Set())}
+                      disabled={selectedEquipment.size === 0}
+                    >
+                      Clear Selection
+                    </Button>
+                    <div className="ml-auto text-sm text-muted-foreground">
+                      {filteredEquipment.length} equipment
+                    </div>
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -426,8 +1073,8 @@ export default function AdminPage() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search equipment by name or category..."
-                    value={searchEquipment}
-                    onChange={(e) => setSearchEquipment(e.target.value)}
+                    defaultValue={searchEquipment}
+                    onChange={(e) => debouncedSearchEquipment(e.target.value)}
                     className="pl-10"
                   />
                 </div>
@@ -436,6 +1083,20 @@ export default function AdminPage() {
                   <Table className="min-w-[700px]">
                     <TableHeader>
                       <TableRow>
+                        {viewMode === 'spreadsheet' && (
+                          <TableHead className="w-12">
+                            <Checkbox
+                              checked={selectedEquipment.size === filteredEquipment.length && filteredEquipment.length > 0}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedEquipment(new Set(filteredEquipment.map(e => e.id)));
+                                } else {
+                                  setSelectedEquipment(new Set());
+                                }
+                              }}
+                            />
+                          </TableHead>
+                        )}
                         <TableHead>Name</TableHead>
                         <TableHead>Total Quantity</TableHead>
                         <TableHead>Available</TableHead>
@@ -445,26 +1106,69 @@ export default function AdminPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredEquipment.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell className="font-medium">{item.name}</TableCell>
-                          <TableCell>
-                            {renderEditableCell(item.id, 'totalQuantity', item.totalQuantity, handleSaveEquipment)}
-                          </TableCell>
-                          <TableCell>{item.availableQuantity}</TableCell>
-                          <TableCell>
-                            {renderEditableCell(item.id, 'category', item.category, handleSaveEquipment)}
-                          </TableCell>
-                          <TableCell>
-                            {renderEditableCell(item.id, 'condition', item.condition, handleSaveEquipment)}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={item.availableQuantity === 0 ? 'destructive' : 'default'}>
-                              {item.availableQuantity === 0 ? 'None Available' : `${item.availableQuantity} Available`}
-                            </Badge>
+                      {filteredEquipment.length === 0 ? (
+                        <TableRow>
+                          <TableCell 
+                            colSpan={viewMode === 'spreadsheet' ? 7 : 6} 
+                            className="h-24 text-center"
+                          >
+                            <div className="flex flex-col items-center justify-center text-muted-foreground">
+                              <Search className="h-8 w-8 mb-2" />
+                              <p>No equipment found</p>
+                              <p className="text-sm">Try adjusting your search</p>
+                            </div>
                           </TableCell>
                         </TableRow>
-                      ))}
+                      ) : (
+                        filteredEquipment.map((item) => (
+                          <TableRow 
+                            key={item.id}
+                            className={selectedEquipment.has(item.id) ? 'bg-muted/50' : ''}
+                          >
+                            {viewMode === 'spreadsheet' && (
+                              <TableCell>
+                                <Checkbox
+                                  checked={selectedEquipment.has(item.id)}
+                                  onCheckedChange={(checked) => {
+                                    const newSet = new Set(selectedEquipment);
+                                    if (checked) {
+                                      newSet.add(item.id);
+                                    } else {
+                                      newSet.delete(item.id);
+                                    }
+                                    setSelectedEquipment(newSet);
+                                  }}
+                                />
+                              </TableCell>
+                            )}
+                            <TableCell className="font-medium">{item.name}</TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(item.id, 'totalQuantity', item.totalQuantity, handleSaveEquipment) :
+                                renderEditableCell(item.id, 'totalQuantity', item.totalQuantity, handleSaveEquipment)
+                              }
+                            </TableCell>
+                            <TableCell>{item.availableQuantity}</TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(item.id, 'category', item.category, handleSaveEquipment) :
+                                renderEditableCell(item.id, 'category', item.category, handleSaveEquipment)
+                              }
+                            </TableCell>
+                            <TableCell>
+                              {viewMode === 'spreadsheet' ? 
+                                renderSpreadsheetCell(item.id, 'condition', item.condition, handleSaveEquipment) :
+                                renderEditableCell(item.id, 'condition', item.condition, handleSaveEquipment)
+                              }
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={item.availableQuantity === 0 ? 'destructive' : 'default'}>
+                                {item.availableQuantity === 0 ? 'None Available' : `${item.availableQuantity} Available`}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
                     </TableBody>
                   </Table>
                 </div>
@@ -518,6 +1222,110 @@ export default function AdminPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete{' '}
+              <strong>
+                {deleteTarget === 'chemicals' ? selectedChemicals.size : selectedEquipment.size} 
+                {' '}{deleteTarget === 'chemicals' ? 'chemical(s)' : 'equipment item(s)'}
+              </strong>
+              {' '}from the database. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isImporting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              disabled={isImporting}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              {isImporting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete Permanently'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* CSV Import Preview Dialog */}
+      <AlertDialog open={csvImportDialogOpen} onOpenChange={setCSVImportDialogOpen}>
+        <AlertDialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <AlertDialogHeader>
+            <AlertDialogTitle>CSV Import Preview</AlertDialogTitle>
+            <AlertDialogDescription>
+              Review the data before importing. Invalid rows will be skipped.
+              <span className="block mt-2 text-sm">
+                <strong>{csvPreviewData.filter(d => d.valid).length}</strong> valid,{' '}
+                <strong className="text-destructive">{csvPreviewData.filter(d => !d.valid).length}</strong> invalid
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Formula</TableHead>
+                  <TableHead>CAS</TableHead>
+                  <TableHead>Quantity</TableHead>
+                  <TableHead>Unit</TableHead>
+                  <TableHead>Category</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {csvPreviewData.map((row, idx) => (
+                  <TableRow key={idx} className={!row.valid ? 'bg-destructive/10' : ''}>
+                    <TableCell>
+                      {row.valid ? (
+                        <CheckCircle className="h-4 w-4 text-green-600" />
+                      ) : (
+                        <span title={row.error}>
+                          <AlertTriangle className="h-4 w-4 text-destructive" />
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-medium">{row.name}</TableCell>
+                    <TableCell>{row.formula}</TableCell>
+                    <TableCell>{row.casNumber}</TableCell>
+                    <TableCell>{row.quantity}</TableCell>
+                    <TableCell>{row.unit}</TableCell>
+                    <TableCell>{row.category}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isImporting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmCSVImport}
+              disabled={isImporting || csvPreviewData.filter(d => d.valid).length === 0}
+            >
+              {isImporting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Importing...
+                </>
+              ) : (
+                `Import ${csvPreviewData.filter(d => d.valid).length} Items`
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

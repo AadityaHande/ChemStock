@@ -5,16 +5,17 @@ const withPWA = withPWAInit({
   dest: 'public',
   disable: process.env.NODE_ENV === 'development',
   register: true,
-  skipWaiting: true,
+  // skipWaiting: true, // Removed - not supported by this PWA plugin version
 });
 
 const nextConfig: NextConfig = {
   /* config options here */
+  // ✅ Production-ready: Enforce TypeScript and ESLint checks
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false, // Changed from true - critical for production safety
   },
   eslint: {
-    ignoreDuringBuilds: true,
+    ignoreDuringBuilds: false, // Changed from true - catch linting issues before deployment
   },
   images: {
     remotePatterns: [

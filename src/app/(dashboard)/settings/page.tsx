@@ -14,34 +14,140 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useTheme } from "next-themes"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useToast } from "@/hooks/use-toast"
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { User } from "lucide-react"
+import { User, Loader2 } from "lucide-react"
+import { useAuth } from "@/contexts/AuthContext"
+import { db } from "@/lib/firebase"
+import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore"
+import { isValidHttpsUrl, sanitizeString } from "@/lib/validation"
 
 export default function SettingsPage() {
     const { setTheme, theme } = useTheme()
     const { toast } = useToast()
-    const [profileUrl, setProfileUrl] = useState("https://images.unsplash.com/photo-1577333715735-8fcb0359d906?ixlib=rb-4.1.0&q=80&w=1080")
-    const [name, setName] = useState("Aaditya Hande")
-    const [email, setEmail] = useState("aadityahande@example.com")
+    const { user } = useAuth()
+    const [profileUrl, setProfileUrl] = useState("")
+    const [name, setName] = useState("")
+    const [email, setEmail] = useState("")
+    const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
+
+    // Load user profile from Firestore
+    useEffect(() => {
+      const loadProfile = async () => {
+        if (!user) {
+          setLoading(false)
+          return
+        }
+
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.uid))
+          
+          if (userDoc.exists()) {
+            const userData = userDoc.data()
+            setName(userData.name || user.displayName || '')
+            setEmail(userData.email || user.email || '')
+            setProfileUrl(userData.profileUrl || user.photoURL || '')
+          } else {
+            // Initialize with auth data
+            setName(user.displayName || '')
+            setEmail(user.email || '')
+            setProfileUrl(user.photoURL || '')
+          }
+        } catch (error) {
+          console.error('Error loading profile:', error)
+          toast({
+            variant: "destructive",
+            title: "Load Failed",
+            description: "Could not load your profile settings.",
+          })
+        } finally {
+          setLoading(false)
+        }
+      }
+
+      loadProfile()
+    }, [user])
     
-    const handleSaveProfile = () => {
-      // Validate profile URL
-      if (profileUrl && !profileUrl.match(/^https:\/\/.+\.png$/i)) {
+    const handleSaveProfile = async () => {
+      if (!user) {
         toast({
           variant: "destructive",
-          title: "Invalid Profile URL",
-          description: "Please enter a valid HTTPS URL ending with .png",
+          title: "Not Authenticated",
+          description: "Please log in to save settings.",
         })
         return
       }
+
+      // Validate profile URL
+      if (profileUrl && !isValidHttpsUrl(profileUrl)) {
+        toast({
+          variant: "destructive",
+          title: "Invalid Profile URL",
+          description: "Please enter a valid HTTPS URL",
+        })
+        return
+      }
+
+      // Validate name
+      const sanitizedName = sanitizeString(name)
+      if (!sanitizedName || sanitizedName.length < 2) {
+        toast({
+          variant: "destructive",
+          title: "Invalid Name",
+          description: "Name must be at least 2 characters.",
+        })
+        return
+      }
+
+      try {
+        setSaving(true)
+
+        const userRef = doc(db, 'users', user.uid)
+        const userDoc = await getDoc(userRef)
+
+        const profileData = {
+          name: sanitizedName,
+          email: user.email,
+          profileUrl: profileUrl ? sanitizeString(profileUrl) : '',
+          updatedAt: new Date(),
+        }
+
+        if (userDoc.exists()) {
+          await updateDoc(userRef, profileData)
+        } else {
+          await setDoc(userRef, {
+            ...profileData,
+            createdAt: new Date(),
+            uid: user.uid,
+          })
+        }
       
-      toast({
-        title: "✅ Profile Updated",
-        description: "Your profile settings have been saved.",
-      })
+        toast({
+          title: "✅ Profile Updated",
+          description: "Your profile settings have been saved.",
+        })
+      } catch (error) {
+        console.error('Error saving profile:', error)
+        toast({
+          variant: "destructive",
+          title: "Save Failed",
+          description: "Could not save your profile settings.",
+        })
+      } finally {
+        setSaving(false)
+      }
     }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <p className="ml-2 text-muted-foreground">Loading settings...</p>
+      </div>
+    )
+  }
 
   return (
     <div className="grid gap-6">
@@ -95,13 +201,22 @@ export default function SettingsPage() {
                 placeholder="https://example.com/avatar.png"
               />
               <p className="text-xs text-muted-foreground">
-                Must be a valid HTTPS URL ending with .png
+                Must be a valid HTTPS URL
               </p>
             </div>
           </form>
         </CardContent>
         <CardFooter className="border-t px-6 py-4">
-          <Button onClick={handleSaveProfile}>Save</Button>
+          <Button onClick={handleSaveProfile} disabled={saving}>
+            {saving ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              'Save'
+            )}
+          </Button>
         </CardFooter>
       </Card>
       <Card>
