@@ -4,20 +4,20 @@
 import React, { useState, useMemo } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { equipment as allEquipment, usageLogs, addUsageLog, type Equipment, type UsageLog } from '@/lib/data';
+import { useFirestore } from '@/contexts/FirestoreContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { useToast } from "@/hooks/use-toast";
 import { Label } from '@/components/ui/label';
-import { AlertCircle, CornerUpLeft } from 'lucide-react';
+import { AlertCircle, CornerUpLeft, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
 
-// SIMULATE LOGGED IN USER
-const CURRENT_FACULTY_ID = 'F1';
-
 type BorrowedItem = {
-    item: Equipment;
+    id: string;
+    name: string;
+    category: string;
     quantity: number;
 }
 
@@ -28,15 +28,18 @@ type ActionQuantities = {
 }
 
 export default function MyActivityPage() {
-    const [logState, setLogState] = useState(usageLogs);
+    const { equipment, usageLogs, addUsageLog, loading } = useFirestore();
+    const { user } = useAuth();
     const { toast } = useToast();
     const [actionQuantities, setActionQuantities] = useState<Record<string, ActionQuantities>>({});
 
     const myBorrowedItems = useMemo((): BorrowedItem[] => {
+        if (!user) return [];
+        
         const borrowedMap: Record<string, number> = {};
 
-        logState
-            .filter(log => log.facultyId === CURRENT_FACULTY_ID && log.itemType === 'equipment')
+        usageLogs
+            .filter(log => log.userId === user.uid && log.itemType === 'equipment')
             .forEach(log => {
                 if (log.action === 'Checked Out') {
                     borrowedMap[log.itemId] = (borrowedMap[log.itemId] || 0) + log.quantity;
@@ -48,11 +51,17 @@ export default function MyActivityPage() {
         return Object.entries(borrowedMap)
             .filter(([, quantity]) => quantity > 0)
             .map(([itemId, quantity]) => {
-                const item = allEquipment.find(e => e.id === itemId);
-                return { item: item!, quantity };
+                const item = equipment.find(e => e.id === itemId);
+                if (!item) return null;
+                return {
+                    id: item.id,
+                    name: item.name,
+                    category: item.category,
+                    quantity
+                };
             })
-            .filter(item => item.item); // Filter out any cases where item wasn't found
-    }, [logState]);
+            .filter((item): item is BorrowedItem => item !== null);
+    }, [usageLogs, equipment, user]);
 
     const handleQuantityChange = (itemId: string, field: keyof ActionQuantities, value: string) => {
         setActionQuantities(prev => {
@@ -85,30 +94,31 @@ export default function MyActivityPage() {
     }
 
 
-    const handleReturn = (itemId: string) => {
-        const borrowedItem = myBorrowedItems.find(b => b.item.id === itemId);
-        if (!borrowedItem) return;
+    const handleReturn = async (itemId: string) => {
+        const borrowedItem = myBorrowedItems.find(b => b.id === itemId);
+        if (!borrowedItem || !user) return;
 
         const quantityToReturn = validateAndParseQty(actionQuantities[itemId]?.returnQty, borrowedItem.quantity, 'return');
         if (quantityToReturn === null) return;
         
-        addUsageLog({
-            facultyId: CURRENT_FACULTY_ID,
+        await addUsageLog({
+            userId: user.uid,
+            userEmail: user.email || '',
             itemId: itemId,
+            itemName: borrowedItem.name,
             itemType: 'equipment',
             quantity: quantityToReturn,
             action: 'Returned',
             unit: 'units',
         });
 
-        setLogState([...usageLogs]);
         setActionQuantities(prev => ({ ...prev, [itemId]: { ...prev[itemId], returnQty: '' } }));
-        toast({ title: "Item(s) Returned", description: `You have returned ${quantityToReturn} unit(s) of ${borrowedItem.item.name}.` });
+        toast({ title: "Item(s) Returned", description: `You have returned ${quantityToReturn} unit(s) of ${borrowedItem.name}.` });
     };
 
-    const handleReportDamaged = (itemId: string) => {
-        const borrowedItem = myBorrowedItems.find(b => b.item.id === itemId);
-        if (!borrowedItem) return;
+    const handleReportDamaged = async (itemId: string) => {
+        const borrowedItem = myBorrowedItems.find(b => b.id === itemId);
+        if (!borrowedItem || !user) return;
 
         const { damageQty, damageNote } = actionQuantities[itemId] || {};
         
@@ -120,9 +130,11 @@ export default function MyActivityPage() {
             return;
         }
 
-        addUsageLog({
-            facultyId: CURRENT_FACULTY_ID,
+        await addUsageLog({
+            userId: user.uid,
+            userEmail: user.email || '',
             itemId: itemId,
+            itemName: borrowedItem.name,
             itemType: 'equipment',
             quantity: quantityToReport,
             action: 'Reported Damaged',
@@ -130,9 +142,8 @@ export default function MyActivityPage() {
             notes: damageNote,
         });
 
-        setLogState([...usageLogs]);
         setActionQuantities(prev => ({ ...prev, [itemId]: { returnQty: '', damageQty: '', damageNote: '' } }));
-        toast({title: "Damage Reported", description: `${quantityToReport} unit(s) of ${borrowedItem.item.name} reported as damaged.`});
+        toast({title: "Damage Reported", description: `${quantityToReport} unit(s) of ${borrowedItem.name} reported as damaged.`});
     }
 
     return (
@@ -141,6 +152,13 @@ export default function MyActivityPage() {
                 <h1 className="text-3xl font-bold tracking-tight">My Activity</h1>
                 <p className="text-muted-foreground">Manage equipment you have checked out.</p>
             </div>
+
+            {loading ? (
+                <div className="flex items-center justify-center py-20">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    <p className="ml-2 text-muted-foreground">Loading activity...</p>
+                </div>
+            ) : (
             <Card>
                 <CardHeader>
                     <CardTitle>Currently Borrowed Equipment</CardTitle>
@@ -150,7 +168,7 @@ export default function MyActivityPage() {
                 </CardHeader>
                 <CardContent className="space-y-6">
                     {myBorrowedItems.length > 0 ? (
-                        myBorrowedItems.map(({ item, quantity }) => {
+                        myBorrowedItems.map((item) => {
                             const quantities = actionQuantities[item.id] || { returnQty: '', damageQty: '', damageNote: '' };
                             return (
                                 <Card key={item.id} className="p-4">
@@ -158,7 +176,7 @@ export default function MyActivityPage() {
                                         <div className="md:col-span-1">
                                             <h3 className="text-lg font-semibold">{item.name}</h3>
                                             <p className="text-muted-foreground">{item.category}</p>
-                                            <p className="text-2xl font-bold mt-2">{quantity} <span className="text-sm font-normal text-muted-foreground">unit(s) borrowed</span></p>
+                                            <p className="text-2xl font-bold mt-2">{item.quantity} <span className="text-sm font-normal text-muted-foreground">unit(s) borrowed</span></p>
                                         </div>
                                         <div className="md:col-span-2 grid sm:grid-cols-2 gap-4">
                                            <div className="space-y-2 rounded-md border p-3">
@@ -172,7 +190,7 @@ export default function MyActivityPage() {
                                                         value={quantities.returnQty}
                                                         onChange={e => handleQuantityChange(item.id, 'returnQty', e.target.value)}
                                                         min={1}
-                                                        max={quantity}
+                                                        max={item.quantity}
                                                     />
                                                     <Button
                                                         className="flex-1"
@@ -182,7 +200,7 @@ export default function MyActivityPage() {
                                                         <CornerUpLeft className="mr-0 sm:mr-2 h-4 w-4" /> <span className="hidden sm:inline">Return</span>
                                                     </Button>
                                                 </div>
-                                                <Button size="sm" variant="outline" className="w-full h-8" onClick={() => handleQuantityChange(item.id, 'returnQty', String(quantity))}>Return All</Button>
+                                                <Button size="sm" variant="outline" className="w-full h-8" onClick={() => handleQuantityChange(item.id, 'returnQty', String(item.quantity))}>Return All</Button>
                                             </div>
                                              <div className="space-y-2 rounded-md border border-destructive/50 p-3">
                                                 <Label htmlFor={`damaged-${item.id}`} className="text-xs font-medium text-destructive">Report Damaged Items</Label>
@@ -195,7 +213,7 @@ export default function MyActivityPage() {
                                                         value={quantities.damageQty}
                                                         onChange={e => handleQuantityChange(item.id, 'damageQty', e.target.value)}
                                                         min={1}
-                                                        max={quantity}
+                                                        max={item.quantity}
                                                     />
                                                     <AlertDialog>
                                                         <AlertDialogTrigger asChild>
@@ -249,6 +267,7 @@ export default function MyActivityPage() {
                     )}
                 </CardContent>
             </Card>
+            )}
         </div>
     );
 }
