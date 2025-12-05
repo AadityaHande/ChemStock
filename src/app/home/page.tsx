@@ -2,7 +2,7 @@
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
 import Link from "next/link";
-import { ListChecks, ShoppingCart, Target, Beaker } from "lucide-react";
+import { ListChecks, ShoppingCart, Target, Beaker, User } from "lucide-react";
 import { AnimatedGrid } from "@/components/animated-grid";
 import { FloatingIcons } from "@/components/floating-icons";
 import { PlaceHolderImages } from "@/lib/placeholder-images";
@@ -20,6 +20,19 @@ export default function HomePage() {
         <section className="relative w-full h-dvh flex items-center justify-center text-center overflow-hidden">
           <AnimatedGrid />
           <FloatingIcons />
+          {/* Top-right Login button - visible on home page only */}
+          <div className="absolute top-6 right-6 z-30 block">
+            <Button
+              asChild
+              size="sm"
+              variant="default"
+              className="rounded-md px-4 py-2 shadow-sm shadow-primary/20 hover:shadow-md hover:shadow-primary/30 transition-all"
+            >
+              <Link href="/login" aria-label="Login to ChemStock" className="flex items-center gap-2 text-white">
+                <span className="text-sm font-medium">Login</span>
+              </Link>
+            </Button>
+          </div>
           <div className="z-20 space-y-6 px-4">
             <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tighter text-foreground">
               Modern Lab Inventory,

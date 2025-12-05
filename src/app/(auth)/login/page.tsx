@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
-import { Loader2 } from "lucide-react";
+import { Loader2, ArrowLeft } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -25,12 +25,25 @@ export default function LoginForm() {
   const { signIn, signInWithGoogle, user, loading } = useAuth();
   const { toast } = useToast();
 
-  // Redirect if already logged in
+  // Do NOT auto-redirect or auto-login here.
+  // Capture possible browser autofill values on mount for controlled inputs.
   useEffect(() => {
-    if (!loading && user) {
-      router.push("/dashboard");
-    }
-  }, [user, loading, router]);
+    const captureAutofill = () => {
+      const emailEl = document.getElementById("email") as HTMLInputElement | null;
+      const passEl = document.getElementById("password") as HTMLInputElement | null;
+      if (emailEl && emailEl.value && !email) setEmail(emailEl.value);
+      if (passEl && passEl.value && !password) setPassword(passEl.value);
+    };
+
+    // Some browsers fire autofill after a tick; try a few times.
+    captureAutofill();
+    const t1 = setTimeout(captureAutofill, 150);
+    const t2 = setTimeout(captureAutofill, 500);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, []); // intentionally no user/loading deps to avoid auto-redirect
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,7 +86,13 @@ export default function LoginForm() {
   }
 
   return (
-    <Card className="mx-auto max-w-sm w-full border-0 sm:border shadow-none sm:shadow-sm">
+    <div>
+      <Link href="/home" className="fixed left-4 top-4 z-50 inline-flex items-center justify-center rounded-md border bg-background p-2 hover:bg-muted">
+        <ArrowLeft className="h-4 w-4" />
+        <span className="sr-only">Back to home</span>
+      </Link>
+
+      <Card className="mx-auto max-w-sm w-full border-0 sm:border shadow-none sm:shadow-sm">
       <CardHeader>
         <CardTitle className="text-2xl text-center">Login to ChemStock</CardTitle>
       </CardHeader>
@@ -87,6 +106,8 @@ export default function LoginForm() {
                 type="email"
                 placeholder="your-email@example.com"
                 required
+                name="email"
+                autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={isLoading}
@@ -97,6 +118,8 @@ export default function LoginForm() {
               <PasswordInput
                 id="password"
                 required
+                name="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={isLoading}
@@ -157,6 +180,7 @@ export default function LoginForm() {
           Only authorized users can access this application.
         </div>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }
