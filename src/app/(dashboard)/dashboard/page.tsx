@@ -20,7 +20,7 @@ export default function Dashboard() {
   const { chemicals, equipment, loading } = useFirestore();
   
   const totalChemicals = chemicals.length;
-  const totalEquipment = equipment.reduce((acc, item) => acc + item.totalQuantity, 0);
+  const totalEquipment = equipment.length; // Count distinct equipment types, not total quantity
   const lowStockChemicals = chemicals.filter(c => c.quantity > 0 && c.quantity < LOW_STOCK_THRESHOLD);
   const outOfStockChemicals = chemicals.filter(c => c.quantity === 0);
 
@@ -66,7 +66,7 @@ export default function Dashboard() {
           <CardContent>
             <div className="text-2xl font-bold">{totalEquipment}</div>
             <p className="text-xs text-muted-foreground">
-              Total individual equipment items
+              Distinct equipment types
             </p>
           </CardContent>
         </Card>
