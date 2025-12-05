@@ -32,7 +32,7 @@ export type Equipment = {
   id: string;
   name: string;
   totalQuantity: number;
-  availableQuantity: number;
+  // availableQuantity removed - always calculate from usage logs
   lastUsed: string;
   category: string;
   condition?: 'good' | 'fair' | 'damaged';

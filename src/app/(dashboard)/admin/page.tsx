@@ -61,7 +61,7 @@ const saveRateLimiter = new RateLimiter(10, 60000);
 
 export default function AdminPage() {
   const { user, isAdmin, loading: authLoading } = useAuth();
-  const { chemicals, equipment, updateChemical, updateEquipment, loading: dataLoading } = useFirestore();
+  const { chemicals, equipment, updateChemical, updateEquipment, usageLogs, loading: dataLoading } = useFirestore();
   const { toast } = useToast();
   const router = useRouter();
 
@@ -90,6 +90,24 @@ export default function AdminPage() {
     debounce((value: string) => setSearchEquipment(value), 300),
     []
   );
+
+  // Calculate equipment availability from usage logs (same as equipment page)
+  const equipmentAvailability = useMemo(() => {
+    const availability: { [key: string]: number } = {};
+    equipment.forEach(item => {
+      const allCheckedOut = usageLogs
+        .filter(log => log.itemId === item.id && log.action === 'Checked Out')
+        .reduce((sum, log) => sum + log.quantity, 0);
+
+      const allReturned = usageLogs
+        .filter(log => log.itemId === item.id && (log.action === 'Returned' || log.action === 'Reported Damaged'))
+        .reduce((sum, log) => sum + log.quantity, 0);
+
+      const inUse = allCheckedOut - allReturned;
+      availability[item.id] = item.totalQuantity - inUse;
+    });
+    return availability;
+  }, [equipment, usageLogs]);
 
   // Redirect if not admin
   if (!authLoading && !isAdmin) {
@@ -288,7 +306,7 @@ export default function AdminPage() {
           return;
         }
         updateData.totalQuantity = validation.value;
-        updateData.availableQuantity = validation.value; // Reset available when total changes
+        // availableQuantity removed - always calculated from usage logs
       } else if (editingCell.field === 'condition') {
         updateData.condition = sanitizeString(editingCell.value);
       } else if (editingCell.field === 'category') {
@@ -385,7 +403,7 @@ export default function AdminPage() {
     const rows = equipment.map(e => [
       e.name,
       e.totalQuantity,
-      e.availableQuantity,
+      equipmentAvailability[e.id] || 0,
       e.category,
       e.condition
     ]);
@@ -1148,7 +1166,7 @@ export default function AdminPage() {
                                 renderEditableCell(item.id, 'totalQuantity', item.totalQuantity, handleSaveEquipment)
                               }
                             </TableCell>
-                            <TableCell>{item.availableQuantity}</TableCell>
+                            <TableCell>{equipmentAvailability[item.id] || 0}</TableCell>
                             <TableCell>
                               {viewMode === 'spreadsheet' ? 
                                 renderSpreadsheetCell(item.id, 'category', item.category, handleSaveEquipment) :
@@ -1162,8 +1180,8 @@ export default function AdminPage() {
                               }
                             </TableCell>
                             <TableCell>
-                              <Badge variant={item.availableQuantity === 0 ? 'destructive' : 'default'}>
-                                {item.availableQuantity === 0 ? 'None Available' : `${item.availableQuantity} Available`}
+                              <Badge variant={equipmentAvailability[item.id] === 0 ? 'destructive' : 'default'}>
+                                {equipmentAvailability[item.id] === 0 ? 'None Available' : `${equipmentAvailability[item.id]} Available`}
                               </Badge>
                             </TableCell>
                           </TableRow>

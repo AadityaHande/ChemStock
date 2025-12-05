@@ -56,7 +56,7 @@ export default function InitDatabasePage() {
         batch.set(equipRef, {
           name: name,
           totalQuantity: total,
-          availableQuantity: total,
+          // availableQuantity removed - always calculated from usage logs
           lastUsed: new Date().toISOString().split('T')[0],
           category: 'Laboratory Equipment',
           condition: 'good',
