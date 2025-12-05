@@ -48,6 +48,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { TrialModeToggle } from "@/components/TrialModeToggle";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
 
 const navItems = [
     { href: "/dashboard", icon: Home, label: "Dashboard" },
@@ -101,12 +104,35 @@ export default function DashboardLayout({
   const { user, loading, signOut, isAdmin } = useAuth();
   const router = useRouter();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [profileUrl, setProfileUrl] = useState("");
 
   useEffect(() => {
     if (!loading && !user) {
       router.push("/login");
     }
   }, [user, loading, router]);
+
+  // Load user profile image from Firestore
+  useEffect(() => {
+    const loadProfileImage = async () => {
+      if (!user) return;
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setProfileUrl(userData.profileUrl || user.photoURL || '');
+        } else {
+          setProfileUrl(user.photoURL || '');
+        }
+      } catch (error) {
+        console.error('Error loading profile image:', error);
+        setProfileUrl(user.photoURL || '');
+      }
+    };
+
+    loadProfileImage();
+  }, [user]);
 
   const handleLogout = async () => {
     await signOut();
@@ -178,7 +204,12 @@ export default function DashboardLayout({
                 size="icon"
                 className="overflow-hidden rounded-full"
               >
-                <User />
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={profileUrl} alt={user.displayName || "User"} />
+                  <AvatarFallback>
+                    <User className="h-4 w-4" />
+                  </AvatarFallback>
+                </Avatar>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
