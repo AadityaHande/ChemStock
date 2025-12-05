@@ -26,11 +26,15 @@ export async function POST(request: NextRequest) {
 
     console.log('Attempting to send email from:', email);
 
+    // Use a test/verified email as the sender when on Resend free tier
+    const primaryRecipient = process.env.RESEND_TEST_EMAIL || 'aadityahande27@gmail.com';
+    const fromHeader = `ChemStock <${primaryRecipient}>`;
+
     // Send email (Resend free tier only allows sending to your verified email)
     // To send to multiple addresses, verify your domain at resend.com/domains
     const { data, error } = await resend.emails.send({
-      from: 'ChemStock <onboarding@resend.dev>',
-      to: ['aadityahande27@gmail.com'],
+      from: fromHeader,
+      to: [primaryRecipient],
       replyTo: email,
       subject: `Support Request: ${subject}`,
       html: `
