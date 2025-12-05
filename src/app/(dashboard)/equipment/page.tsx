@@ -8,7 +8,7 @@ import { useFirestore } from '@/contexts/FirestoreContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Search, Minus, Plus, CornerUpLeft, LogIn, Loader2 } from 'lucide-react';
+import { Search, Minus, Plus, CornerUpLeft, LogIn, Loader2, Download, Lock, Unlock } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -19,12 +19,14 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useToast } from "@/hooks/use-toast";
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 
 type SortOption = 'name-asc' | 'name-desc' | 'last-used-asc' | 'last-used-desc';
 
 export default function EquipmentPage() {
   const { equipment, usageLogs, addUsageLog, loading } = useFirestore();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
+  const [editMode, setEditMode] = useState(false);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -173,7 +175,44 @@ export default function EquipmentPage() {
       return 'Available';
   }
 
+  const exportFilteredEquipment = () => {
+    const csvContent = [
+      ['Name', 'Category', 'Total Quantity', 'Available', 'In Use', 'Last Used'],
+      ...filteredAndSortedEquipment.map(e => {
+        const status = equipmentStatus[e.id] || { inUse: 0, available: e.totalQuantity, borrowedByMe: 0 };
+        return [
+          e.name,
+          e.category,
+          e.totalQuantity.toString(),
+          status.available.toString(),
+          status.inUse.toString(),
+          new Date(e.lastUsed).toLocaleDateString()
+        ];
+      })
+    ].map(row => row.join(',')).join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `equipment-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    toast({ title: "Export Complete", description: `${filteredAndSortedEquipment.length} items exported.` });
+  };
+
   const handleQuantityButtonClick = (id: string, amount: number) => {
+    if (!editMode && amount < 0) {
+      toast({ 
+        variant: "destructive",
+        title: "Edit Mode Disabled", 
+        description: "Please enable Edit Mode to modify quantities." 
+      });
+      return;
+    }
     const currentQty = checkoutQuantities[id] || 1;
     const newQty = Math.max(1, currentQty + amount);
     const item = equipmentStatus[id];
@@ -200,15 +239,41 @@ export default function EquipmentPage() {
       ) : (
       <Card>
         <CardHeader>
-          <div className="flex flex-col md:flex-row gap-2 justify-between">
-              <div className="relative w-full max-w-sm">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                      placeholder="Search items..."
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      className="pl-10"
-                  />
+          <div className="flex flex-col gap-4">
+              <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+                  <div className="relative w-full max-w-sm">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                          placeholder="Search items..."
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                          className="pl-10"
+                      />
+                  </div>
+                  <div className="flex items-center gap-4 flex-wrap">
+                      {isAdmin && (
+                          <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-muted/50">
+                              {editMode ? <Unlock className="h-4 w-4 text-green-600" /> : <Lock className="h-4 w-4 text-muted-foreground" />}
+                              <Label htmlFor="edit-mode-equipment" className="text-sm font-medium cursor-pointer">
+                                  Edit Mode
+                              </Label>
+                              <Switch 
+                                  id="edit-mode-equipment"
+                                  checked={editMode} 
+                                  onCheckedChange={setEditMode}
+                              />
+                          </div>
+                      )}
+                      <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={exportFilteredEquipment}
+                          disabled={filteredAndSortedEquipment.length === 0}
+                      >
+                          <Download className="mr-2 h-4 w-4" />
+                          Export ({filteredAndSortedEquipment.length})
+                      </Button>
+                  </div>
               </div>
               <div className="flex gap-2 flex-wrap sm:flex-nowrap">
                   <Select value={categoryFilter} onValueChange={setCategoryFilter}>

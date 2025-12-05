@@ -6,10 +6,13 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useFirestore } from '@/contexts/FirestoreContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
-import { AlertTriangle, Search, Edit, Check, Pipette, Loader2 } from 'lucide-react';
+import { AlertTriangle, Search, Edit, Check, Pipette, Loader2, Download, Lock, Unlock } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { useToast } from "@/hooks/use-toast"
 
 const LOW_STOCK_THRESHOLD = 50;
@@ -28,10 +31,12 @@ type ChemicalCardState = {
 
 export default function ChemicalsPage() {
   const { chemicals, updateChemical, loading } = useFirestore();
+  const { isAdmin } = useAuth();
   const [search, setSearch] = useState('');
   const [sortOption, setSortOption] = useState<SortOption>('name-asc');
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
   const [cardStates, setCardStates] = useState<Record<string, ChemicalCardState>>({});
+  const [editMode, setEditMode] = useState(false);
 
   const { toast } = useToast();
 
@@ -55,6 +60,14 @@ export default function ChemicalsPage() {
   };
 
   const toggleEdit = (id: string) => {
+    if (!editMode) {
+      toast({ 
+        variant: "destructive",
+        title: "Edit Mode Disabled", 
+        description: "Please enable Edit Mode to modify quantities." 
+      });
+      return;
+    }
     const currentState = cardStates[id];
     if (currentState.isEditing) {
       handleSetQuantity(id);
@@ -167,6 +180,33 @@ export default function ChemicalsPage() {
     return 'Available';
   }
 
+  const exportFilteredChemicals = () => {
+    const csvContent = [
+      ['Name', 'Formula', 'CAS Number', 'Quantity', 'Unit', 'Status', 'Last Updated'],
+      ...filteredAndSortedChemicals.map(c => [
+        c.name,
+        c.formula,
+        c.casNumber,
+        c.quantity.toString(),
+        c.unit,
+        getStatusText(c.quantity),
+        new Date(c.lastUpdated).toLocaleDateString()
+      ])
+    ].map(row => row.join(',')).join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chemicals-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    toast({ title: "Export Complete", description: `${filteredAndSortedChemicals.length} chemicals exported.` });
+  };
+
   return (
     <div className="flex flex-col gap-8">
         <div className="space-y-1">
@@ -182,15 +222,41 @@ export default function ChemicalsPage() {
         ) : (
         <Card>
             <CardHeader>
-                <div className="flex flex-col md:flex-row gap-4 justify-between">
-                    <div className="relative w-full max-w-sm">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input 
-                            placeholder="Search by name, formula, or CAS..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            className="pl-10"
-                        />
+                <div className="flex flex-col gap-4">
+                    <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+                        <div className="relative w-full max-w-sm">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input 
+                                placeholder="Search by name, formula, or CAS..."
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                className="pl-10"
+                            />
+                        </div>
+                        <div className="flex items-center gap-4 flex-wrap">
+                            {isAdmin && (
+                                <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-muted/50">
+                                    {editMode ? <Unlock className="h-4 w-4 text-green-600" /> : <Lock className="h-4 w-4 text-muted-foreground" />}
+                                    <Label htmlFor="edit-mode" className="text-sm font-medium cursor-pointer">
+                                        Edit Mode
+                                    </Label>
+                                    <Switch 
+                                        id="edit-mode"
+                                        checked={editMode} 
+                                        onCheckedChange={setEditMode}
+                                    />
+                                </div>
+                            )}
+                            <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={exportFilteredChemicals}
+                                disabled={filteredAndSortedChemicals.length === 0}
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                Export ({filteredAndSortedChemicals.length})
+                            </Button>
+                        </div>
                     </div>
                      <div className="flex gap-2 flex-wrap">
                         <Select value={stockFilter} onValueChange={(v) => setStockFilter(v as StockFilter)}>
@@ -262,9 +328,11 @@ export default function ChemicalsPage() {
                                                         {chemical.quantity.toFixed(3)} {chemical.unit}
                                                     </p>
                                                 )}
-                                                <Button size="icon" variant="ghost" onClick={() => toggleEdit(chemical.id)}>
-                                                    {state.isEditing ? <Check className="h-4 w-4 text-green-500"/> : <Edit className="h-4 w-4"/>}
-                                                </Button>
+                                                {editMode && (
+                                                    <Button size="icon" variant="ghost" onClick={() => toggleEdit(chemical.id)}>
+                                                        {state.isEditing ? <Check className="h-4 w-4 text-green-500"/> : <Edit className="h-4 w-4"/>}
+                                                    </Button>
+                                                )}
                                             </div>
                                         </div>
                                          <div className="space-y-2">
