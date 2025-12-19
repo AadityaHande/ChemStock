@@ -150,8 +150,6 @@ Update `.env.local` with:
 npm run dev
 ```
 
-Open 👉 [http://localhost:9002](http://localhost:9002)
-
 ---
 
 ## 🔐 Authentication Rules
@@ -161,6 +159,7 @@ Open 👉 [http://localhost:9002](http://localhost:9002)
 * Unauthorized users are automatically logged out
 
 ---
+
 ## 🏗 Project Structure
 
 ```
@@ -212,6 +211,7 @@ src/
 │   └── utils.ts             # Helper functions
 └── public/                  # Static assets (PWA, images, etc.)
 ```
+
 ---
 
 ## 🧰 Tech Stack
