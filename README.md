@@ -1,120 +1,214 @@
-# ChemStock - Chemical Laboratory Inventory Management
+# 🧪 ChemStock — Chemical Laboratory Inventory Management System
 
-A modern Next.js application for managing chemical and equipment inventory in laboratories, with real-time search powered by PubChem API.
+A modern **Next.js-based inventory management system** for handling chemicals and laboratory equipment with **role-based access, real-time tracking, audit logs, and chemical data integration via PubChem API**.
 
-## Features
+> ⚠️ **ChemStock is actively used in a college chemistry laboratory.**
 
-- 🔐 **Firebase Authentication** - Email/Password and Google Sign-in with role-based access
-- 🔒 **Access Control** - Admin and regular user roles with permission management
-- 🧪 **Chemical Viewer** - Search chemicals using PubChem API with detailed information
-- 📦 **Chemical Inventory** - Track chemical quantities with low-stock alerts and usage tracking
-- 🔧 **Equipment Management** - Check-out/return system with availability tracking
-- 🛒 **Reorder Cart** - Automatic low-stock detection and manual chemical ordering
-- 📊 **Reports & Analytics** - Generate usage reports, inventory reports, and audit logs
-- 💾 **Database Backup** - Full database backup and restore functionality (admin only)
-- 📈 **Activity Logs** - Comprehensive audit trail of all inventory actions
-- ⚡ **Edit Mode Protection** - Admin-only edit controls for inventory management
-- 📥 **CSV Export** - Download chemicals, equipment, and reports as CSV files
-- 🌙 **Dark Mode** - Theme toggle support with system preference detection
-- 📱 **Responsive Design** - Optimized for desktop, tablet, and mobile devices
-- 🔍 **Advanced Search** - Filter and sort inventory with real-time search
-- 🚨 **Stock Alerts** - Automatic notifications for low and out-of-stock items
+---
 
-## Setup
+## ❓ Why ChemStock?
 
-### 1. Install Dependencies
+Most academic laboratories still manage chemicals and equipment using **manual registers or spreadsheets**, which leads to:
 
+- Poor stock visibility
+- No audit trail or accountability
+- Safety risks due to expired or excess chemicals
+- Time-consuming reporting
+
+**ChemStock** digitizes laboratory workflows by providing **controlled access, real-time inventory tracking, audit logs, and structured reporting**, making lab operations **safer, transparent, and efficient**.
+
+---
+
+## ✨ Features
+
+- 🔐 **Firebase Authentication**
+  - Email/Password and Google Sign-In
+  - Secure session handling
+
+- 🔒 **Role-Based Access Control (RBAC)**
+  - Admin and regular user roles
+  - Permission-based feature access
+
+- 🧪 **Chemical Viewer**
+  - Real-time chemical search using **PubChem API**
+  - Detailed chemical information
+
+- 📦 **Chemical Inventory Management**
+  - Quantity tracking
+  - Low-stock and out-of-stock alerts
+  - Usage history
+
+- 🔧 **Equipment Management**
+  - Equipment check-out / return system
+  - Availability and usage tracking
+
+- 🛒 **Reorder Cart**
+  - Automatic low-stock detection
+  - Manual chemical ordering support
+
+- 📊 **Reports & Analytics**
+  - Inventory reports
+  - Usage reports
+  - Audit reports
+
+- 📈 **Activity & Audit Logs**
+  - Complete audit trail of inventory actions
+  - User-wise activity tracking
+
+- 💾 **Database Backup & Restore**
+  - Full Firestore backup
+  - Restore functionality (Admin only)
+
+- ⚡ **Edit Mode Protection**
+  - Admin-only edit controls
+  - Prevents accidental modifications
+
+- 📥 **CSV Export**
+  - Export chemicals, equipment, and reports
+
+- 🌙 **Dark Mode**
+  - Theme toggle
+  - System preference detection
+
+- 📱 **Responsive Design**
+  - Optimized for desktop, tablet, and mobile
+
+- 🔍 **Advanced Search**
+  - Real-time filtering and sorting
+
+- 🚨 **Stock Alerts**
+  - Automatic notifications for low / empty stock
+
+---
+
+## 🚀 Setup & Installation
+
+### 1️⃣ Install Dependencies
 ```bash
 npm install
-```
+````
 
-### 2. Configure Firebase
+---
 
-See [FIREBASE_SETUP.md](./FIREBASE_SETUP.md) for detailed Firebase setup instructions.
+### 2️⃣ Firebase Configuration
 
-Quick steps:
-1. Create Firebase project
-2. Enable Email/Password and Google authentication
-3. Add authorized users in Firebase Console
-4. Copy Firebase config to `.env.local`
+Refer to:
+📄 **[FIREBASE_SETUP.md](./FIREBASE_SETUP.md)**
 
-### 3. Environment Variables
+Quick overview:
 
-Copy `.env.example` to `.env.local` and fill in your Firebase credentials:
+1. Create a Firebase project
+2. Enable Email/Password & Google authentication
+3. Set up Firestore database
+4. Add authorized users
+
+---
+
+### 3️⃣ Environment Variables
 
 ```bash
 cp .env.example .env.local
 ```
 
-Update `.env.local` with your Firebase config and authorized emails.
+Update `.env.local` with:
 
-### 4. Run Development Server
+* Firebase credentials
+* Authorized email IDs
+
+---
+
+### 4️⃣ Run Development Server
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:9002](http://localhost:9002)
+Open 👉 [http://localhost:9002](http://localhost:9002)
 
-## Authentication
+---
 
-- Only users listed in `NEXT_PUBLIC_ALLOWED_EMAILS` can access the app
-- Users can login with Email/Password or Google
-- Unauthorized users are automatically logged out
+## 🔐 Authentication Rules
 
-## Project Structure
+* Only emails listed in `NEXT_PUBLIC_ALLOWED_EMAILS` can access the app
+* Users can log in using Email/Password or Google
+* Unauthorized users are automatically logged out
+
+---
+
+## 🏗 Project Structure
 
 ```
 src/
 ├── app/
 │   ├── (auth)/              # Authentication pages (login, register)
-│   ├── (dashboard)/         # Protected dashboard pages
-│   │   ├── activity/        # Usage logs and activity tracking
+│   ├── (dashboard)/         # Protected dashboard routes
+│   │   ├── activity/        # Activity & audit logs
 │   │   ├── admin/           # Admin panel (reports, backup, settings)
-│   │   ├── cart/            # Chemical reorder management
+│   │   ├── cart/            # Reorder cart management
 │   │   ├── chemical-viewer/ # PubChem chemical search
-│   │   ├── chemicals/       # Chemical inventory management
+│   │   ├── chemicals/       # Chemical inventory
 │   │   ├── dashboard/       # Main dashboard overview
 │   │   ├── equipment/       # Equipment checkout system
 │   │   ├── init-db/         # Database initialization
-│   │   ├── reports/         # Reporting and analytics
-│   │   ├── settings/        # User settings
-│   │   └── support/         # Support and help
+│   │   ├── reports/         # Reports & analytics
+│   │   ├── settings/        # User preferences
+│   │   └── support/         # Support pages
 │   ├── home/                # Landing page
-│   └── layout.tsx           # Root layout with providers
+│   └── layout.tsx           # Root layout & providers
 ├── components/
 │   ├── ui/                  # shadcn/ui components
-│   └── [other components]   # Custom reusable components
+│   └── custom/              # Reusable components
 ├── contexts/
-│   ├── AuthContext.tsx      # Authentication state management
-│   └── FirestoreContext.tsx # Firestore data management
+│   ├── AuthContext.tsx      # Authentication state
+│   └── FirestoreContext.tsx # Firestore data handling
 ├── lib/
 │   ├── firebase.ts          # Firebase configuration
-│   ├── backup.ts            # Database backup utilities
-│   ├── reports.ts           # Report generation utilities
+│   ├── backup.ts            # Backup utilities
+│   ├── reports.ts           # Report generation
 │   ├── auditLog.ts          # Audit logging
 │   ├── data.ts              # Data utilities
-│   └── [other utilities]    # Helper functions
+│   └── utils.ts             # Helper functions
 └── hooks/                   # Custom React hooks
 ```
 
-## Tech Stack
+---
 
-- **Next.js 15.5.7** - React framework with App Router
-- **Firebase** - Authentication and Firestore database
-- **Tailwind CSS** - Utility-first styling
-- **shadcn/ui** - Beautiful accessible UI components
-- **PubChem API** - Chemical data integration
-- **TypeScript** - Type-safe development
-- **PWA** - Progressive Web App support for offline access
+## 🧰 Tech Stack
 
-## Documentation
+* **Next.js 15.5.7** — App Router
+* **TypeScript** — Type-safe development
+* **Firebase** — Authentication & Firestore
+* **Tailwind CSS** — Utility-first styling
+* **shadcn/ui** — Accessible UI components
+* **PubChem API** — Chemical data
+* **PWA** — Offline-ready support
 
-- [Firebase Setup Guide](./FIREBASE_SETUP.md) - Detailed Firebase configuration
-- [Role Permissions](./docs/ROLESINFO.md) - Complete role-based feature access guide
-- [Features Status](./FEATURES_STATUS.txt) - Current implementation status
-- [Production Readiness](./PRODUCTION_READINESS.md) - Deployment checklist
+---
 
-## License
+## 📚 Documentation
 
-MIT
+* 🔧 **[Firebase Setup Guide](./docs/FIREBASE_SETUP.md)**
+* 🛂 **[Role Permissions](./docs/ROLESINFO.md)**
+
+---
+
+## 📄 License
+
+MIT License
+
+---
+
+## 🤝 Collaboration
+
+ChemStock is a collaborative project built through close teamwork and mutual effort.  
+Both contributors have been involved in designing, building, improving, and refining the system over time — from early UI development to feature expansion and ongoing enhancements.
+
+The project reflects shared responsibility, shared learning, and shared ownership, with work evolving naturally as the system grew in scope and complexity.
+
+**Contributors:**
+- **Aaditya Hande** — GitHub: [@AadityaHande](https://github.com/AadityaHande)
+- **Aditya Suryawanshi** — GitHub: [@Aditya00038](https://github.com/Aditya00038)
+
+---
+
+**ChemStock** — enabling **safe, auditable, and efficient laboratory inventory management**.
