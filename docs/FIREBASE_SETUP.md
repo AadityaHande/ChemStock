@@ -39,7 +39,6 @@ NEXT_PUBLIC_ADMIN_EMAILS=admin@example.com
 RESEND_API_KEY=re_XXXXXXXXXXXXX
 RESEND_API_KEY_ALT=
 ```
-```
 
 > **Do not commit `.env.local`** or any actual Firebase secrets. Keep keys and emails private and manage them via your chosen CI/CD secrets mechanism when deploying.
 
